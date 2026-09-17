@@ -1,0 +1,19 @@
+{
+  "dxt_version": "0.1",
+  "name": "fastmcp-expense-tracker",
+  "display_name": "Expense Tracker",
+  "version": "1.0.0",
+  "description": "Track expenses with add, list, summarize, edit, delete, and credit tools, backed by SQLite",
+  "author": {
+    "name": "you"
+  },
+  "server": {
+    "type": "python",
+    "entry_point": "main.py",
+    "mcp_config": {
+      "command": "C:/Users/GEO COMPUTER S/Desktop/fastmcp-demo-server/.venv/Scripts/python.exe",
+      "args": ["${__dirname}/main.py"],
+      "env": {}
+    }
+  }
+}

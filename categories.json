@@ -1,0 +1,12 @@
+{
+  "Groceries": ["Weekly shop", "Monthly stock-up", "Snacks", "Other"],
+  "Transport": ["Fuel", "Ride share", "Parking", "Public transit", "Other"],
+  "Food": ["Breakfast", "Lunch", "Dinner", "Coffee", "Snacks", "Takeout", "Other"],
+  "Utilities": ["Electricity bill", "Internet bill", "Water bill", "Gas bill", "Other"],
+  "Rent": ["Monthly rent", "Other"],
+  "Entertainment": ["Movie", "Concert", "Streaming", "Games", "Other"],
+  "Health": ["Pharmacy", "Gym membership", "Doctor visit", "Insurance", "Other"],
+  "Shopping": ["Clothes", "Electronics", "Home goods", "Other"],
+  "Education": ["Course fee", "Books", "Tuition", "Other"],
+  "Credit": ["Refund", "Reimbursement", "Other"]
+}
