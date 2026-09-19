@@ -1,7 +1,10 @@
+import asyncio
 import json
-import sqlite3
 from pathlib import Path
 from typing import Optional
+
+import aiofiles
+import aiosqlite
 from fastmcp import FastMCP
 
 DB_PATH = Path(__file__).parent / "expenses.db"
@@ -9,10 +12,13 @@ CATEGORIES_PATH = Path(__file__).parent / "categories.json"
 
 mcp = FastMCP(name="Expense Tracker")
 
+_db_ready = False
+_db_lock = asyncio.Lock()
 
-def init_db():
-    with sqlite3.connect(DB_PATH) as c:
-        c.execute("""
+
+async def init_db() -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS expenses(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL,
@@ -22,19 +28,27 @@ def init_db():
                 note TEXT DEFAULT ''
             )
         """)
+        await db.commit()
 
 
-def load_categories() -> dict[str, list[str]]:
-    with open(CATEGORIES_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+async def ensure_db() -> None:
+    global _db_ready
+    if _db_ready:
+        return
+    async with _db_lock:
+        if not _db_ready:
+            await init_db()
+            _db_ready = True
 
 
-init_db()
+async def load_categories() -> dict[str, list[str]]:
+    async with aiofiles.open(CATEGORIES_PATH, "r", encoding="utf-8") as f:
+        return json.loads(await f.read())
 
 
-def validate_category(category: str, subcategory: str) -> Optional[str]:
+async def validate_category(category: str, subcategory: str) -> Optional[str]:
     """Returns an error message if invalid, otherwise None."""
-    categories = load_categories()
+    categories = await load_categories()
     if category not in categories:
         valid = ", ".join(categories.keys())
         return f"Invalid category '{category}'. Valid categories: {valid}"
@@ -45,22 +59,24 @@ def validate_category(category: str, subcategory: str) -> Optional[str]:
 
 
 @mcp.tool
-def list_categories() -> dict[str, list[str]]:
+async def list_categories() -> dict[str, list[str]]:
     """List all valid expense categories and their allowed subcategories. Call this before add_expense or edit_expense to pick valid values."""
-    return load_categories()
+    return await load_categories()
 
 
 @mcp.tool
-def add_expense(date: str, amount: float, category: str, subcategory: str = "", note: str = "") -> dict:
+async def add_expense(date: str, amount: float, category: str, subcategory: str = "", note: str = "") -> dict:
     """Add a new expense. Date format: YYYY-MM-DD. Category and subcategory must match list_categories()."""
-    error = validate_category(category, subcategory)
+    error = await validate_category(category, subcategory)
     if error:
         return {"error": error}
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute(
+    await ensure_db()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
             "INSERT INTO expenses (date, amount, category, subcategory, note) VALUES (?, ?, ?, ?, ?)",
             (date, amount, category, subcategory, note),
         )
+        await db.commit()
         return {
             "id": cur.lastrowid, "date": date, "amount": amount,
             "category": category, "subcategory": subcategory, "note": note,
@@ -68,8 +84,9 @@ def add_expense(date: str, amount: float, category: str, subcategory: str = "", 
 
 
 @mcp.tool
-def list_expenses(start_date: str = "", end_date: str = "", category: str = "") -> list[dict]:
+async def list_expenses(start_date: str = "", end_date: str = "", category: str = "") -> list[dict]:
     """List expenses, optionally filtered by date range (YYYY-MM-DD) and/or category."""
+    await ensure_db()
     query = "SELECT id, date, amount, category, subcategory, note FROM expenses WHERE 1=1"
     params = []
     if start_date:
@@ -82,8 +99,9 @@ def list_expenses(start_date: str = "", end_date: str = "", category: str = "") 
         query += " AND category = ?"
         params.append(category)
     query += " ORDER BY date"
-    with sqlite3.connect(DB_PATH) as c:
-        rows = c.execute(query, params).fetchall()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(query, params) as cur:
+            rows = await cur.fetchall()
     return [
         {"id": r[0], "date": r[1], "amount": r[2], "category": r[3], "subcategory": r[4], "note": r[5]}
         for r in rows
@@ -91,8 +109,9 @@ def list_expenses(start_date: str = "", end_date: str = "", category: str = "") 
 
 
 @mcp.tool
-def summarize(start_date: str = "", end_date: str = "") -> dict:
+async def summarize(start_date: str = "", end_date: str = "") -> dict:
     """Summarize expenses by category within an optional date range (YYYY-MM-DD)."""
+    await ensure_db()
     where = "WHERE 1=1"
     params = []
     if start_date:
@@ -101,14 +120,18 @@ def summarize(start_date: str = "", end_date: str = "") -> dict:
     if end_date:
         where += " AND date <= ?"
         params.append(end_date)
-    with sqlite3.connect(DB_PATH) as c:
-        rows = c.execute(f"SELECT category, SUM(amount) FROM expenses {where} GROUP BY category", params).fetchall()
-        total = c.execute(f"SELECT SUM(amount) FROM expenses {where}", params).fetchone()[0]
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            f"SELECT category, SUM(amount) FROM expenses {where} GROUP BY category", params
+        ) as cur:
+            rows = await cur.fetchall()
+        async with db.execute(f"SELECT SUM(amount) FROM expenses {where}", params) as cur:
+            total = (await cur.fetchone())[0]
     return {"by_category": {r[0]: r[1] for r in rows}, "total": total or 0}
 
 
 @mcp.tool
-def edit_expense(
+async def edit_expense(
     id: int,
     date: str = "",
     amount: Optional[float] = None,
@@ -118,7 +141,7 @@ def edit_expense(
 ) -> dict:
     """Edit an existing expense by id. Only the fields you provide are updated. Category/subcategory must match list_categories()."""
     if category:
-        error = validate_category(category, subcategory)
+        error = await validate_category(category, subcategory)
         if error:
             return {"error": error}
     fields = []
@@ -141,34 +164,40 @@ def edit_expense(
     if not fields:
         return {"error": "No fields provided to update."}
     params.append(id)
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute(f"UPDATE expenses SET {', '.join(fields)} WHERE id = ?", params)
+    await ensure_db()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(f"UPDATE expenses SET {', '.join(fields)} WHERE id = ?", params)
+        await db.commit()
         if cur.rowcount == 0:
             return {"error": f"No expense found with id {id}"}
     return {"status": "updated", "id": id}
 
 
 @mcp.tool
-def delete_expense(id: int) -> dict:
+async def delete_expense(id: int) -> dict:
     """Delete an expense by id."""
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute("DELETE FROM expenses WHERE id = ?", (id,))
+    await ensure_db()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("DELETE FROM expenses WHERE id = ?", (id,))
+        await db.commit()
         if cur.rowcount == 0:
             return {"error": f"No expense found with id {id}"}
     return {"status": "deleted", "id": id}
 
 
 @mcp.tool
-def add_credit(date: str, amount: float, subcategory: str = "", note: str = "") -> dict:
+async def add_credit(date: str, amount: float, subcategory: str = "", note: str = "") -> dict:
     """Record a credit/refund. Stored as a negative amount under category 'Credit', reducing total expenses."""
-    error = validate_category("Credit", subcategory)
+    error = await validate_category("Credit", subcategory)
     if error:
         return {"error": error}
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute(
+    await ensure_db()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
             "INSERT INTO expenses (date, amount, category, subcategory, note) VALUES (?, ?, 'Credit', ?, ?)",
             (date, -abs(amount), subcategory, note),
         )
+        await db.commit()
         return {"id": cur.lastrowid, "date": date, "amount": -abs(amount), "subcategory": subcategory, "note": note}
 
 
