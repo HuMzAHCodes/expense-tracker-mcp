@@ -15,3 +15,9 @@ wheels/
 __pycache__/
 *.pyc
 .env
+
+# SQLite database (runtime data, not source)
+expenses.db
+expenses.db-journal
+expenses.db-wal
+expenses.db-shm
