@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS expenses(
 )
 ```
 
-The database file is `expenses.db`, next to `main.py`. It is listed in `.gitignore`, so it is not part of the repository. Each environment (your machine, the hosted server) has its own separate database, and they do not sync.
+The database file is `expenses.db`. The server uses the folder next to `main.py` when it can write there, and otherwise falls back to the system temp folder. You can force a location with the `EXPENSES_DB_PATH` environment variable. The chosen file is logged at startup. The file is listed in `.gitignore`, so it is not part of the repository. Each environment (your machine, the hosted server) has its own separate database, and they do not sync. A file on a hosted server can be lost when the server is rebuilt or moved, so treat hosted data as disposable unless you use a real hosted database.
 
 ## Async design
 

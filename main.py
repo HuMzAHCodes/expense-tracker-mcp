@@ -1,5 +1,9 @@
 import asyncio
 import json
+import os
+import sqlite3
+import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -7,7 +11,41 @@ import aiofiles
 import aiosqlite
 from fastmcp import FastMCP
 
-DB_PATH = Path(__file__).parent / "expenses.db"
+
+def _candidate_db_paths() -> list[Path]:
+    # EXPENSES_DB_PATH wins if set. Otherwise prefer the project folder, then the system temp
+    # folder, because some hosts only allow writing to temp.
+    paths = [Path(__file__).parent / "expenses.db", Path(tempfile.gettempdir()) / "expenses.db"]
+    override = os.getenv("EXPENSES_DB_PATH")
+    return ([Path(override)] if override else []) + paths
+
+
+def _can_write(path: Path) -> bool:
+    # Forces a real journal write, then rolls it back, so a read-only folder is caught up front.
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(path, isolation_level=None)
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("CREATE TABLE IF NOT EXISTS _write_probe(x)")
+            db.execute("ROLLBACK")
+        finally:
+            db.close()
+        return True
+    except (OSError, sqlite3.Error):
+        return False
+
+
+def _choose_db_path() -> Path:
+    candidates = _candidate_db_paths()
+    for path in candidates:
+        if _can_write(path):
+            return path
+    return candidates[0]
+
+
+DB_PATH = _choose_db_path()
+print(f"[expense-tracker] using database file: {DB_PATH}", file=sys.stderr)
 CATEGORIES_PATH = Path(__file__).parent / "categories.json"
 
 mcp = FastMCP(name="Expense Tracker")
@@ -37,7 +75,10 @@ async def ensure_db() -> None:
         return
     async with _db_lock:
         if not _db_ready:
-            await init_db()
+            try:
+                await init_db()
+            except sqlite3.Error as e:
+                raise RuntimeError(f"Database unavailable at {DB_PATH}: {e}") from e
             _db_ready = True
 
 

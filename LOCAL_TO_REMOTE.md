@@ -98,9 +98,13 @@ Clean up test data afterwards so you do not leave junk on a live server.
 
 **Two servers with the same tool names.** If you keep the local extension enabled next to the remote one, both expose `add_expense`, `list_expenses`, and so on. Clients may show two near-identical tool sets. Disable the local one while testing the remote so you know which you are hitting.
 
-**Runtime data and Git.** If a database file is tracked in Git, a stray `git add .` can commit your local copy over the deployed one. Add it to `.gitignore` and untrack it with `git rm --cached <file>`, which removes it from the repo but keeps your local file.
+**Runtime data and Git.** If a database file is tracked in Git, a stray `git add .` can commit your local copy over the deployed one. Add it to `.gitignore` and untrack it with `git rm --cached <file>`, which removes it from the repo but keeps your local file. Read the next note before doing this for a database the hosted server depends on.
 
-**Persistence of the SQLite file (observed, not guaranteed).** On this project the hosted database kept its rows and its `AUTOINCREMENT` counter across two redeploys, including one after the file was removed from the repo. We saw ids continue past a deleted row instead of restarting. Do not rely on that. Hosting platforms can reset local files when they rebuild or move a server. For data you cannot afford to lose, use a hosted database instead of a file on the server.
+**Do not assume a database file survives on the host.** On this project we first believed the hosted database kept its rows across redeploys, because ids kept counting up after a deploy. That was misleading. The connection we tested with was a long-lived session opened *before* the deploys, so it was most likely still talking to the old server copy. Connections opened afterwards failed with `unable to open database file`: the new deployment no longer had `expenses.db` (we had removed it from the repo) and the server apparently could not create one where it was looking. Lessons:
+
+- Test a deploy with a **new** connection, not a session that was opened before the deploy.
+- Make the server choose a writable location and say clearly when it cannot. This project now tries its own folder, then the system temp folder, logs which file it is using, and reports the path and reason if the database still cannot be opened.
+- Even then, a file on the host can be lost whenever the server is rebuilt or moved. For data you cannot afford to lose, use a real hosted database instead of a file on the server.
 
 **Optional arguments and some clients (observed).** With one client we used, tools with optional arguments rejected calls that left them out, with an "expected nonoptional" validation error. Passing the arguments explicitly, using empty strings for the unused ones, worked. It came from the client-side validator, not the Python server. If a client behaves this way, pass every argument.
 
